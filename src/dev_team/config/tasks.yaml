@@ -1,0 +1,300 @@
+---
+requirements_analysis_task:
+  name: Analyze Requirements
+  description: |
+    Using the RequirementsAnalysisTool, analyze the project goal and codebase directory to understand requirements following Agile principles.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    
+    Focus on:
+    1. Creating detailed user stories
+    2. Defining acceptance criteria
+    3. Prioritizing features
+    4. Breaking down requirements into manageable sprints
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A comprehensive requirements document that includes:
+    1. Detailed user stories with acceptance criteria
+    2. Product backlog with prioritized items
+    3. Initial sprint planning and velocity estimates
+    4. Project timeline and milestone recommendations
+  agent: project_manager
+  priority: 1
+
+architecture_design_task:
+  name: Design Architecture
+  description: |
+    Using the CodebaseAnalysisTool, design the software architecture for the project.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    Requirements: [Use the output from the requirements analysis task]
+    
+    Focus on:
+    1. High-level system design
+    2. Component organization
+    3. Data flow and interactions
+    4. Technology stack recommendations
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed architecture document that includes:
+    1. System component diagram
+    2. Data flow diagrams
+    3. Technology stack recommendations
+    4. Design patterns to be used
+    5. Scalability and performance considerations
+  agent: software_architect
+  priority: 2
+  dependencies:
+    - requirements_analysis_task
+
+codebase_analysis_task:
+  name: Analyze Codebase
+  description: |
+    Using the CodeAnalysisTool, analyze the codebase at {codebase_dir} to identify areas for improvement and potential technical debt.
+    Project Goal: {project_goal}
+    Architecture: [Use the output from the architecture design task]
+    
+    Focus on code complexity, documentation coverage, and alignment with the architecture design.
+    Generate a detailed report with specific recommendations for improvements.
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A comprehensive analysis report that includes:
+    1. Code quality metrics (complexity, documentation ratio)
+    2. Identified potential issues and their locations in {codebase_dir}
+    3. Specific recommendations for improvements aligned with {project_goal}
+    4. Gap analysis between current code and proposed architecture
+  agent: software_architect
+  priority: 3
+  dependencies:
+    - architecture_design_task
+
+sprint_planning_task:
+  name: Plan Sprint
+  description: |
+    Using the AgileProjectManagementTool, create a sprint plan for implementation.
+    Project Goal: {project_goal}
+    Requirements: [Use the output from the requirements analysis task]
+    Architecture: [Use the output from the architecture design task]
+    Codebase Analysis: [Use the output from the codebase analysis task]
+    
+    Focus on:
+    1. Sprint goal definition
+    2. Task allocation to team members
+    3. Setting up the sprint backlog
+    4. Defining acceptance criteria for tasks
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed sprint plan that includes:
+    1. Sprint goal and duration
+    2. Prioritized sprint backlog
+    3. Task assignments with story points
+    4. Definition of done for each task
+    5. Team capacity and velocity estimates
+  agent: project_manager
+  priority: 4
+  dependencies:
+    - requirements_analysis_task
+    - architecture_design_task
+    - codebase_analysis_task
+
+implement_features_task:
+  name: Implement Features
+  description: |
+    Using the CodeImplementationTool and CodeGenerationTool, implement the features according to the sprint plan.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    Sprint Plan: [Use the output from the sprint planning task]
+    
+    Focus on:
+    1. Following the architecture design
+    2. Implementing user stories from the sprint backlog
+    3. Creating backups before making changes
+    4. Adhering to coding standards
+    5. Writing and executing code when needed
+    
+    Before finalizing your implementation, check with a human to verify if your approach and code are correct.
+    Ask specific questions about any areas you're uncertain about and get feedback on your implementation.
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed implementation report including:
+    1. List of user stories implemented
+    2. Changes made to each file in {codebase_dir}
+    3. Backup locations for modified files
+    4. Summary of features implemented to support {project_goal}
+    5. Any challenges encountered and how they were addressed
+    6. Code written and executed to implement features
+  agent: fullstack_developer
+  priority: 5
+  dependencies:
+    - sprint_planning_task
+  human_input: true
+
+write_tests_task:
+  name: Write Tests
+  description: |
+    Using the TestGenerationTool, write comprehensive tests for the implemented features.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    Implemented Features: [Use the output from the implement features task]
+    
+    Focus on:
+    1. Unit tests for individual components
+    2. Integration tests for component interactions
+    3. Ensuring proper test coverage
+    4. Testing edge cases and error handling
+    5. Writing and executing test code
+    
+    Before finalizing your test suite, check with a human to verify if your testing approach is comprehensive.
+    Ask specific questions about test coverage, edge cases, and get feedback on your test implementation.
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed testing report that includes:
+    1. Test cases created for each feature
+    2. Test coverage metrics
+    3. Identified edge cases and how they're handled
+    4. Any bugs or issues discovered during testing
+    5. Test code written and executed
+  agent: test_engineer
+  priority: 6
+  dependencies:
+    - implement_features_task
+  human_input: true
+
+code_review_task:
+  name: Review Code
+  description: |
+    Using the CodeReviewTool, perform a comprehensive review of the implemented changes.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    
+    Check against:
+    1. Code style standards (PEP 8)
+    2. Security best practices
+    3. General coding best practices
+    4. Documentation completeness
+    5. Alignment with architecture design
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed review report containing:
+    1. Code quality assessment for {codebase_dir}
+    2. Identified issues by category
+    3. Specific suggestions for improvements
+    4. Overall recommendation for the changes
+  agent: test_engineer
+  priority: 7
+  dependencies:
+    - implement_features_task
+    - write_tests_task
+
+refactor_code_task:
+  name: Refactor Code
+  description: |
+    Using the CodeRefactoringTool, refactor the codebase to improve structure and reduce complexity.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    Code Review: [Use the output from the code review task]
+    
+    Focus on:
+    1. Addressing issues identified in the code review
+    2. Improving code structure and organization
+    3. Reducing complexity and technical debt
+    4. Ensuring backward compatibility
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed refactoring report that includes:
+    1. Changes made to improve code structure
+    2. Before and after complexity metrics
+    3. Technical debt addressed
+    4. Any risks or challenges encountered
+  agent: software_architect
+  priority: 8
+  dependencies:
+    - code_review_task
+
+cleanup_code_task:
+  name: Cleanup Code
+  description: |
+    Using the ObsoleteCodeCleanupTool, identify and remove obsolete code, files, and dependencies.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    
+    Focus on:
+    1. Removing dead code
+    2. Cleaning up unused dependencies
+    3. Consolidating duplicate code
+    4. Ensuring clean and maintainable codebase
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed cleanup report that includes:
+    1. Files and code sections removed
+    2. Dependencies cleaned up
+    3. Overall impact on codebase size and complexity
+    4. Recommendations for future maintenance
+  agent: software_architect
+  priority: 9
+  dependencies:
+    - refactor_code_task
+
+update_documentation_task:
+  name: Update Documentation
+  description: |
+    Create and update documentation to reflect all changes made during the sprint.
+    Project Goal: {project_goal}
+    Codebase: {codebase_dir}
+    Implementation: [Use the output from the implement features task]
+    Refactoring: [Use the output from the refactor code task]
+    
+    Focus on:
+    1. Updating README and user guides
+    2. Creating/updating API documentation
+    3. Documenting architecture decisions
+    4. Creating sprint retrospective summary
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A comprehensive documentation update that includes:
+    1. Updated README and user guides
+    2. API documentation for new features
+    3. Architecture decision records
+    4. Sprint summary and retrospective
+    5. Future development recommendations
+  agent: project_manager
+  priority: 10
+  dependencies:
+    - cleanup_code_task
+
+sprint_retrospective_task:
+  name: Conduct Sprint Retrospective
+  description: |
+    Using the AgileProjectManagementTool, conduct a sprint retrospective to review the sprint outcomes.
+    Project Goal: {project_goal}
+    Sprint Plan: [Use the output from the sprint planning task]
+    Implementation: [Use the output from the implement features task]
+    
+    Focus on:
+    1. What went well during the sprint
+    2. What could be improved
+    3. Action items for future sprints
+    4. Team velocity and capacity analysis
+    
+    Consider user feedback: {user_feedback}
+  expected_output: |
+    A detailed retrospective report that includes:
+    1. Sprint goals achieved vs. planned
+    2. Team velocity metrics
+    3. What went well and areas for improvement
+    4. Action items for future sprints
+    5. Recommendations for process adjustments
+  agent: project_manager
+  priority: 11
+  dependencies:
+    - update_documentation_task

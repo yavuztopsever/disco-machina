@@ -1,0 +1,35 @@
+#!/bin/bash
+# DiscoMachina - Launcher script for AI-powered Dev Team agents
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# Check if the server is running
+server_running=false
+curl -s http://localhost:8000/health > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    server_running=true
+else
+    # Try to start the server if it's not running
+    echo "Starting Dev Team API server..."
+    python -m src.dev_team.main server > /dev/null 2>&1 &
+    SERVER_PID=$!
+    
+    # Give it a moment to start
+    sleep 2
+    
+    # Check if it's running now
+    curl -s http://localhost:8000/health > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        server_running=true
+        echo "Server started successfully."
+    else
+        echo "Warning: Could not start the server automatically."
+        kill $SERVER_PID 2>/dev/null
+    fi
+fi
+
+# Run the Python script with the current directory automatically passed as codebase
+# This lets the user just type 'discomachina' from any project directory
+CURRENT_DIR="$(pwd)"
+python3 "${SCRIPT_DIR}/terminal_client.py" "$@"
