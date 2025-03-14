@@ -1,56 +1,51 @@
-from typing import List, Dict, Any, Optional
+"""
+Dev Team Tools module - Custom tools for Dev Team agents
+"""
+
 from .dev_tools import (
-    CodeAnalysisTool,
-    CodeImplementationTool,
-    CodeReviewTool,
+    # Project Manager Tools
     RequirementsAnalysisTool,
     TaskTrackingTool,
-    TestGenerationTool,
-    TestRunnerTool,
-    CodeCoverageTool,
-    CodeGenerationTool,
-    DependencyManagementTool,
+    AgileProjectManagementTool,
+    
+    # Software Architect Tools
+    CodeAnalysisTool,
     CodebaseAnalysisTool,
     CodeRefactoringTool,
     ObsoleteCodeCleanupTool,
-    AgileProjectManagementTool
-)
-from .crewai_tools import (
-    brave_search_tool,
-    code_docs_search_tool,
-    code_interpreter_tool,
-    directory_read_tool,
-    file_read_tool,
-    file_writer_tool,
-    github_search_tool,
-    CREWAI_TOOLS
+    
+    # Fullstack Developer Tools
+    CodeImplementationTool,
+    CodeGenerationTool,
+    DependencyManagementTool,
+    
+    # Test Engineer Tools
+    TestGenerationTool,
+    TestRunnerTool,
+    CodeCoverageTool,
+    CodeReviewTool
 )
 
-# Available tools
 __all__ = [
-    # Custom tools
-    'CodeAnalysisTool',
-    'CodeImplementationTool',
-    'CodeReviewTool',
-    'RequirementsAnalysisTool',
-    'TaskTrackingTool',
-    'TestGenerationTool',
-    'TestRunnerTool',
-    'CodeCoverageTool',
-    'CodeGenerationTool',
-    'DependencyManagementTool',
-    'CodebaseAnalysisTool',
-    'CodeRefactoringTool',
-    'ObsoleteCodeCleanupTool',
-    'AgileProjectManagementTool',
+    # Project Manager Tools
+    "RequirementsAnalysisTool",
+    "TaskTrackingTool",
+    "AgileProjectManagementTool",
     
-    # CrewAI tools
-    'brave_search_tool',
-    'code_docs_search_tool',
-    'code_interpreter_tool',
-    'directory_read_tool',
-    'file_read_tool',
-    'file_writer_tool',
-    'github_search_tool',
-    'CREWAI_TOOLS'
+    # Software Architect Tools
+    "CodeAnalysisTool",
+    "CodebaseAnalysisTool",
+    "CodeRefactoringTool",
+    "ObsoleteCodeCleanupTool",
+    
+    # Fullstack Developer Tools
+    "CodeImplementationTool",
+    "CodeGenerationTool",
+    "DependencyManagementTool",
+    
+    # Test Engineer Tools
+    "TestGenerationTool",
+    "TestRunnerTool",
+    "CodeCoverageTool",
+    "CodeReviewTool"
 ]

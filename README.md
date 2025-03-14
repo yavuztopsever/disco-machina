@@ -1,129 +1,181 @@
 # Disco-Machina
 
-AI-powered software development crew terminal client with chat and API server integration.
+AI-powered software development terminal client with chat and API server integration.
 
 ## Overview
 
-Disco-Machina is a terminal client for interacting with AI-powered software development agents. It provides a user-friendly interface for creating projects, tracking progress, chatting with the Project Manager agent, and more.
+Disco-Machina is a self-contained terminal client that provides intelligent codebase analysis and development assistance. It automatically detects and analyzes your current workspace, providing context-aware responses and insights about your codebase.
 
 ## Key Features
 
-- **Interactive Terminal Client**: Colorful ASCII art interface with command-line tools
-- **Chat with Project Manager**: Directly communicate with the Project Manager agent
-- **Multiple Specialized Agents**: Project Manager, Software Architect, Fullstack Developer, and Test Engineer
-- **Complete Agile Development Process**: From requirements analysis to sprint retrospectives
-- **Multiple Client Options**: Standard terminal client, simplified client, and robust client for all environments
-- **Docker Support**: Easy deployment with Docker and healthcheck monitoring
+- **Interactive Terminal Client**
+  - Beautiful ASCII art interface with color support
+  - Command history and completion
+  - Special commands for enhanced functionality
+  - Real-time status updates
+
+- **Automatic Workspace Detection**
+  - Automatically detects current working directory
+  - Scans project structure and configuration files
+  - Identifies key dependencies and technologies
+  - Provides context-aware responses
+
+- **RAG-Based Analysis**
+  - Retrieval Augmented Generation for accurate codebase understanding
+  - Real-time workspace context in every interaction
+  - Intelligent file and directory analysis
+  - Configuration file detection and parsing
+
+- **Offline Mode Support**
+  - Graceful degradation when server is unavailable
+  - Local caching of responses
+  - Automatic context management
+  - Persistent chat history
+
+- **Context Management**
+  - Smart context compaction
+  - Token-aware message handling
+  - Automatic history summarization
+  - Workspace-aware responses
+
+- **Error Handling & Recovery**
+  - Graceful error handling
+  - Automatic retry mechanisms
+  - Offline mode fallback
+  - Clear error reporting
+
+- **User Experience**
+  - Color-coded output
+  - Progress indicators
+  - Keyboard shortcuts
+  - Clear status messages
 
 ## Installation
 
+1. Clone the repository:
 ```bash
-# Clone the repository
 git clone https://github.com/yavuztopsever/disco-machina.git
 cd disco-machina
+```
 
-# Run the installation script
-./install.sh
-
-# Or install manually
+2. Install dependencies:
+```bash
 pip install -r requirements.txt
+```
+
+3. Create a `.env` file with your API keys:
+```env
+OPENAI_API_KEY=your_openai_api_key
+BRAVE_API_KEY=your_brave_api_key  # Optional
+GH_TOKEN=your_github_token  # Optional
 ```
 
 ## Usage
 
-### Terminal Client
+### Basic Commands
 
+1. Start a chat session:
 ```bash
-# Start the chat with Project Manager
-python terminal_client.py chat
-
-# Create a new project
-python terminal_client.py create --goal "Create a REST API for a blog" --interactive
-
-# List all projects
-python terminal_client.py list
-
-# Get details for a specific project
-python terminal_client.py get <job-id>
-
-# Replay a specific task
-python terminal_client.py replay <task-index>
+discomachina chat
 ```
 
-### Alternative Clients
-
+2. Create a new project:
 ```bash
-# Use the simple chat client
-python simple_chat.py
-
-# Use the robust chat client (works in all environments)
-python robust_chat.py
-
-# Test the chat functionality
-python test_chat.py
+discomachina create --goal "Analyze this codebase" --interactive
 ```
 
-### API Server
-
+3. List all projects:
 ```bash
-# Start the API server
-python -m src.dev_team.server
-
-# Use the API server
-curl -X POST http://localhost:8000/projects -H "Content-Type: application/json" -d '{"project_goal": "Create a REST API", "codebase_dir": "/tmp/output"}'
+discomachina list
 ```
+
+4. Get project status:
+```bash
+discomachina get <job_id>
+```
+
+5. Replay a task:
+```bash
+discomachina replay <index>
+```
+
+### Chat Commands
+
+While in chat mode, you can use these special commands:
+- `/help` - Show available commands
+- `/clear` - Clear the screen
+- `/status` - Show server and session status
+- `/compact` - Manually compact chat history
+- `/version` - Show version information
+- `exit` - End the chat session
+
+### Workspace Analysis
+
+The client automatically:
+1. Detects your current working directory
+2. Scans for configuration files and project structure
+3. Identifies key dependencies and technologies
+4. Provides context-aware responses about your codebase
 
 ### Docker Support
 
+1. Using docker-compose:
 ```bash
-# Using docker-compose
-docker-compose up
+docker-compose up -d
+```
 
-# Or run the Docker image directly
-docker run -p 8000:8000 -v ./output:/app/output -e OPENAI_API_KEY=$OPENAI_API_KEY disco-machina
+2. Running the Docker image directly:
+```bash
+docker run -p 8000:8000 disco-machina:latest
 ```
 
 ## Project Structure
 
-The project is organized as follows:
+```
+disco-machina/
+├── terminal_client.py    # Main terminal client application
+├── requirements.txt     # Python dependencies
+├── docker-compose.yml   # Docker Compose configuration
+├── Dockerfile          # Docker build configuration
+└── .env               # Environment variables (create this)
+```
 
-- `terminal_client.py` - Main terminal client with all commands
-- `simple_chat.py` - Simplified chat client
-- `robust_chat.py` - Enhanced chat client for all environments
-- `test_chat.py` - Test script for the chat functionality
-- `src/dev_team/` - Main source code directory
-  - `server.py` - API server implementation
-  - `crew.py` - Implementation of the Dev Team crew
-  - `tools/` - Tools used by the agents
-  - `config/` - Configuration files
-  - `docs/` - Technical documentation
-- `docs/` - User documentation
-  - `client_usage.md` - Terminal client usage guide
-  - `terminal_interaction_guide.md` - Detailed interaction guide
-  - `terminal_client_changes.md` - Changes summary
+## Features
 
-## Agent Capabilities
+### Automatic Workspace Detection
+- Detects current working directory
+- Scans project structure
+- Identifies configuration files
+- Provides real-time context
 
-The AI team consists of four specialized agents organized in a hierarchical structure:
+### RAG-Based Analysis
+- Intelligent codebase understanding
+- Context-aware responses
+- Real-time workspace updates
+- Configuration file parsing
 
-1. **Project Manager** (Leader)
-   - Requirements analysis, sprint planning, documentation, team coordination
-   - Direct chat interface through the terminal client
+### Offline Mode
+- Local caching of responses
+- Graceful degradation
+- Persistent chat history
+- Automatic context management
 
-2. **Software Architect** (Technical Lead)
-   - Architecture design, code structure analysis, refactoring, code cleanup
+### Error Handling
+- Graceful error recovery
+- Clear error messages
+- Automatic retry
+- Offline fallback
 
-3. **Fullstack Developer** (Implementer)
-   - Feature implementation, code generation, dependency management
-
-4. **Test Engineer** (Quality Assurance)
-   - Test creation, execution, code coverage, and code review
+### User Experience
+- Color-coded output
+- Progress indicators
+- Keyboard shortcuts
+- Status messages
 
 ## Author
 
-**Yavuz Topsever**
-- GitHub: [https://github.com/yavuztopsever](https://github.com/yavuztopsever)
+Created by Yavuz Topsever (https://github.com/yavuztopsever)
 
 ## License
 
-[MIT License](LICENSE)# disco-machina
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

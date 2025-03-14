@@ -1,0 +1,46 @@
+{
+  "validAddition": {
+    "operation": "add",
+    "values": [2, 3]
+  },
+  "validSubtraction": {
+    "operation": "subtract",
+    "values": [5, 3]
+  },
+  "validMultiplication": {
+    "operation": "multiply",
+    "values": [2, 3, 4]
+  },
+  "validDivision": {
+    "operation": "divide",
+    "values": [6, 3]
+  },
+  "validPower": {
+    "operation": "power",
+    "values": [2, 3]
+  },
+  "validSqrt": {
+    "operation": "sqrt",
+    "values": [9]
+  },
+  "validExpression": {
+    "operation": "evaluate",
+    "expression": "2 + 3 * 4"
+  },
+  "divisionByZero": {
+    "operation": "divide",
+    "values": [5, 0]
+  },
+  "negativeSqrt": {
+    "operation": "sqrt",
+    "values": [-4]
+  },
+  "invalidExpression": {
+    "operation": "evaluate",
+    "expression": "2 + + 3"
+  },
+  "maliciousExpression": {
+    "operation": "evaluate",
+    "expression": "console.log(document.cookie)"
+  }
+}

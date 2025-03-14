@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-Disco-Machina - Terminal client for interacting with Dev Team API server
+Disco-Machina - Terminal client for interacting with API server
 with real-time output and context management.
+
+This is a self-contained terminal client that provides:
+- Interactive chat with AI agents
+- Project management and task tracking
+- Offline mode support with graceful degradation
+- Robust error handling and recovery
+- Context-aware command completion
+- Automatic session management
 
 Created by Yavuz Topsever (https://github.com/yavuztopsever)
 """
@@ -17,12 +25,30 @@ import logging
 import signal
 import pkg_resources
 from datetime import datetime
+import sqlite3
+import readline
+import atexit
+import hashlib
+from pathlib import Path
+from typing import Dict, List, Optional, Union, Any
 
-# Configure logging
+# Version information
+__version__ = "1.0.0"
+__author__ = "Yavuz Topsever"
+__email__ = "yavuz.topsever@windowslive.com"
+
+# Configure logging with rotation
+log_file = os.path.join(os.path.expanduser("~"), ".discomachina", "client.log")
+os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger("discomachina")
 
@@ -31,62 +57,117 @@ context_storage = {
     "messages": [],
     "token_count": 0,
     "max_tokens": 100000,  # Adjust based on model's context window
-    "compact_threshold": 80000  # 80% of max tokens
+    "compact_threshold": 80000,  # 80% of max tokens
+    "session_id": None,
+    "offline_mode": False
 }
 
-# ASCII Art for intro with ANSI colors
-ASCII_INTRO = r"""
-\033[38;5;51m╔══════════════════════════════════════════════════════════════════════════╗\033[0m
-\033[38;5;51m║ \033[38;5;205m                                                                      \033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[38;5;205m  ____  _                 __  __            _     _             \033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[38;5;205m |  _ \(_)___  ___ ___   |  \/  | __ _  ___| |__ (_)_ __   __ _ \033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[38;5;205m | | | | / __|/ __/ _ \  | |\/| |/ _` |/ __| '_ \| | '_ \ / _` |\033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[38;5;76m | |_| | \__ \ (_| (_) | | |  | | (_| | (__| | | | | | | | (_| |\033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[38;5;76m |____/|_|___/\___\___/  |_|  |_|\__,_|\___|_| |_|_|_| |_|\__,_|\033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[38;5;76m                                                                \033[38;5;51m ║\033[0m
-\033[38;5;51m║                                                                              ║\033[0m
-\033[38;5;51m║ \033[1;38;5;226m                 AI-Powered Dev Team Agents                          \033[38;5;51m ║\033[0m
-\033[38;5;51m║ \033[1;38;5;226m          Building the Future, One Line at a Time                    \033[38;5;51m ║\033[0m
-\033[38;5;51m║                                                                              ║\033[0m
-\033[38;5;51m╚══════════════════════════════════════════════════════════════════════════════╝\033[0m
+class OfflineCache:
+    """Handle offline caching of requests and responses"""
+    def __init__(self):
+        self.cache_dir = os.path.join(os.path.expanduser("~"), ".discomachina", "cache")
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.db_path = os.path.join(self.cache_dir, "offline_cache.db")
+        self._init_db()
 
-\033[38;5;93m              ⚪ Create ⚪ Analyze ⚪ Refactor ⚪ Test ⚪ Document               \033[0m
-"""
+    def _init_db(self):
+        """Initialize SQLite database for caching"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cache (
+                    request_hash TEXT PRIMARY KEY,
+                    request TEXT,
+                    response TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-# Function to detect if terminal supports colors
+    def cache_response(self, request: Dict[str, Any], response: Dict[str, Any]):
+        """Cache a response for a given request"""
+        request_hash = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO cache (request_hash, request, response) VALUES (?, ?, ?)",
+                (request_hash, json.dumps(request), json.dumps(response))
+            )
+
+    def get_cached_response(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Get cached response for a request"""
+        request_hash = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+        with sqlite3.connect(self.db_path) as conn:
+            result = conn.execute(
+                "SELECT response FROM cache WHERE request_hash = ?",
+                (request_hash,)
+            ).fetchone()
+            return json.loads(result[0]) if result else None
+
+# Initialize offline cache
+offline_cache = OfflineCache()
+
 def supports_color():
     """
     Returns True if the running system's terminal supports color,
     and False otherwise.
     """
+    # If running in a known CI environment, assume no color support
+    if os.environ.get('CI', False):
+        return False
+
+    # Check platform specific cases
     plat = sys.platform
     supported_platform = plat != 'Pocket PC' and (plat != 'win32' or 'ANSICON' in os.environ)
-    
-    # isatty is not always implemented, so we use try-except
+
+    # Check if we have an interactive terminal
     is_a_tty = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
-    
-    if not supported_platform or not is_a_tty:
-        return False
-        
-    return True
+
+    # Check for Windows specific cases
+    if plat == 'win32':
+        try:
+            from ctypes import windll
+            return supported_platform and is_a_tty and windll.kernel32.GetConsoleMode(windll.kernel32.GetStdHandle(-11)) != 0
+        except:
+            return False
+
+    # For all other platforms, check if we have a tty
+    return supported_platform and is_a_tty
+
+# ASCII Art for intro with ANSI colors
+ASCII_INTRO = r"""
+╔══════════════════════════════════════════════════════════════════════════╗
+║                                                                          ║
+║       ____  _                 __  __            _     _                  ║
+║      |  _ \(_)___  ___ ___   |  \/  | __ _  ___| |__ (_)_ __   __ _      ║
+║      | | | | / __|/ __/ _ \  | |\/| |/ _` |/ __| '_ \| | '_ \ / _` |     ║
+║      | |_| | \__ \ (_| (_) | | |  | | (_| | (__| | | | | | | | (_| |     ║
+║      |____/|_|___/\___\___/  |_|  |_|\__,_|\___|_| |_|_|_| |_|\__,_|     ║
+║                                                                          ║
+║                                                                          ║
+║                          AI-Powered Agent Suite                          ║
+║                                                                          ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+              ⚪ Create ⚪ Analyze ⚪ Refactor ⚪ Test ⚪ Document
+
+"""
 
 # ASCII Art without colors as fallback
 ASCII_INTRO_NO_COLOR = r"""
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                                                                          ║
-║   ____  _                 __  __            _     _                      ║
-║  |  _ \(_)___  ___ ___   |  \/  | __ _  ___| |__ (_)_ __   __ _         ║
-║  | | | | / __|/ __/ _ \  | |\/| |/ _` |/ __| '_ \| | '_ \ / _` |        ║
-║  | |_| | \__ \ (_| (_) | | |  | | (_| | (__| | | | | | | | (_| |        ║
-║  |____/|_|___/\___\___/  |_|  |_|\__,_|\___|_| |_|_|_| |_|\__,_|        ║
+║       ____  _                 __  __            _     _                  ║
+║      |  _ \(_)___  ___ ___   |  \/  | __ _  ___| |__ (_)_ __   __ _      ║
+║      | | | | / __|/ __/ _ \  | |\/| |/ _` |/ __| '_ \| | '_ \ / _` |     ║
+║      | |_| | \__ \ (_| (_) | | |  | | (_| | (__| | | | | | | | (_| |     ║
+║      |____/|_|___/\___\___/  |_|  |_|\__,_|\___|_| |_|_|_| |_|\__,_|     ║
 ║                                                                          ║
 ║                                                                          ║
-║                  AI-Powered Dev Team Agents                              ║
-║           Building the Future, One Line at a Time                        ║
+║                          AI-Powered Agent Suite                          ║
+║                                                                          ║
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
-               ⚪ Create ⚪ Analyze ⚪ Refactor ⚪ Test ⚪ Document
+              ⚪ Create ⚪ Analyze ⚪ Refactor ⚪ Test ⚪ Document
 """
 
 def print_with_timestamp(message, message_type="info"):
@@ -222,12 +303,40 @@ def manually_compact():
     else:
         print_with_timestamp("No context to compact yet.", "warning")
 
+def resolve_workspace_path(provided_path=None):
+    """
+    Resolve and validate the workspace path.
+    
+    Args:
+        provided_path (str, optional): Path provided by the user. Defaults to None.
+        
+    Returns:
+        str: Absolute path to the workspace
+        
+    Raises:
+        SystemExit: If the path is invalid or doesn't exist
+    """
+    # Use provided path or current working directory
+    workspace_path = os.path.abspath(provided_path if provided_path else os.getcwd())
+    
+    # Validate path exists
+    if not os.path.exists(workspace_path):
+        print_with_timestamp(f"Error: Directory does not exist: {workspace_path}", "error")
+        sys.exit(1)
+    
+    # Validate path is a directory
+    if not os.path.isdir(workspace_path):
+        print_with_timestamp(f"Error: Path is not a directory: {workspace_path}", "error")
+        sys.exit(1)
+        
+    return workspace_path
+
 def create_project(args):
     """Create a new project"""
     url = f"{args.server}/projects"
     
-    # Use current directory if not specified
-    codebase_dir = args.dir if args.dir else os.getcwd()
+    # Resolve and validate workspace path
+    codebase_dir = resolve_workspace_path(args.dir)
     
     data = {
         "project_goal": args.goal,
@@ -357,163 +466,209 @@ def reset_memory(args):
     except Exception as e:
         print_with_timestamp(f"Error: {str(e)}", "error")
         
-def chat_with_agent(args):
-    """Start an interactive chat with the Project Manager agent"""
-    url = f"{args.server}/chat"
-    codebase_dir = os.getcwd()
+def get_workspace_info():
+    """Get information about the current workspace directory"""
+    workspace_path = os.getcwd()
+    workspace_info = {
+        "path": workspace_path,
+        "name": os.path.basename(workspace_path),
+        "files": [],
+        "directories": [],
+        "config_files": []
+    }
     
-    # Welcome message
-    if supports_color():
-        print("\n\033[38;5;205m╔══════════════════════════════════════════════════════════════════════════╗\033[0m")
-        print("\033[38;5;205m║                      Project Manager Agent Chat                           ║\033[0m")
-        print("\033[38;5;205m╚══════════════════════════════════════════════════════════════════════════╝\033[0m\n")
-    else:
-        print("\n╔══════════════════════════════════════════════════════════════════════════╗")
-        print("║                      Project Manager Agent Chat                           ║")
-        print("╚══════════════════════════════════════════════════════════════════════════╝\n")
-    
-    print_with_timestamp("Starting chat session with Project Manager agent...", "system")
-    print_with_timestamp("Current codebase: " + codebase_dir, "info")
-    
-    # Animate connecting to agent
-    progress_bar("Connecting to Project Manager agent...", duration=1.5)
-    
-    # Initialize chat history with system message
-    chat_history = [
-        {
-            "role": "system", 
-            "content": f"You are the Project Manager agent for a software development team. You're helping with a codebase located at {codebase_dir}. Provide helpful, concise responses to the user's questions about their project."
-        }
+    # Common configuration files to look for
+    config_files = [
+        "package.json", "requirements.txt", "pyproject.toml", "setup.py",
+        "docker-compose.yml", "Dockerfile", ".env", "README.md",
+        "tsconfig.json", "next.config.js", "tailwind.config.js"
     ]
     
-    # Add initial message from agent
-    initial_agent_message = {
-        "role": "assistant",
-        "content": "How can I help you today? You can ask questions about your codebase, request research, brainstorm ideas, or give me specific tasks."
-    }
-    chat_history.append(initial_agent_message)
-    
-    # Display initial agent message
-    if supports_color():
-        agent_prompt = f"\033[38;5;76m[Project Manager]\033[0m {initial_agent_message['content']}"
-    else:
-        agent_prompt = f"[Project Manager] {initial_agent_message['content']}"
-    
-    print("\n" + agent_prompt + "\n")
-    
-    # Check server connectivity before starting chat
     try:
-        health_check = requests.get(f"{args.server}/health", timeout=5)
-        if health_check.status_code != 200:
-            print_with_timestamp("Warning: Server appears to be online but may not be responding properly.", "warning")
+        for root, dirs, files in os.walk(workspace_path):
+            # Skip hidden directories and common build/cache directories
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', '.next', '__pycache__']]
+            
+            rel_path = os.path.relpath(root, workspace_path)
+            if rel_path == '.':
+                workspace_info["directories"] = dirs
+                for file in files:
+                    if file in config_files:
+                        workspace_info["config_files"].append(file)
+                    else:
+                        workspace_info["files"].append(file)
     except Exception as e:
-        print_with_timestamp(f"Warning: Could not connect to server at {args.server}", "warning")
-        print_with_timestamp("Chat might not work correctly. Make sure the server is running.", "warning")
+        logger.error(f"Error scanning workspace: {e}")
     
-    # Main chat loop
+    return workspace_info
+
+def initialize_chat_history(codebase_dir: str) -> List[Dict[str, str]]:
+    """Initialize chat history with system message and workspace context"""
+    workspace_info = get_workspace_info()
+    
+    workspace_context = f"""
+Current workspace: {workspace_info['path']}
+Project name: {workspace_info['name']}
+Configuration files: {', '.join(workspace_info['config_files'])}
+Main directories: {', '.join(workspace_info['directories'])}
+Key files: {', '.join(workspace_info['files'][:10])}{'...' if len(workspace_info['files']) > 10 else ''}
+"""
+    
+    return [{
+        "role": "system",
+        "content": f"You are the Project Manager agent for a software development team. "
+                  f"You're working with a codebase located at {workspace_info['path']}. "
+                  f"Here is the workspace context:\n{workspace_context}\n"
+                  f"Provide helpful, concise responses to the user's questions about their project."
+    }]
+
+def chat_with_agent(args):
+    """Start an interactive chat with the Project Manager agent with improved features"""
+    url = f"{args.server}/chat"
+    
+    # Get workspace information
+    workspace_info = get_workspace_info()
+    print_with_timestamp(f"Analyzing workspace: {workspace_info['path']}", "system")
+    
+    # Setup command history
+    history_file = os.path.join(os.path.expanduser("~"), ".discomachina", "chat_history")
+    try:
+        readline.read_history_file(history_file)
+    except FileNotFoundError:
+        pass
+    atexit.register(readline.write_history_file, history_file)
+    
+    # Welcome message with workspace context
+    display_welcome_message()
+    if supports_color():
+        print(f"\033[38;5;39mWorkspace:\033[0m \033[38;5;76m{workspace_info['path']}\033[0m")
+        print(f"\033[38;5;39mProject:\033[0m \033[38;5;76m{workspace_info['name']}\033[0m")
+    else:
+        print(f"Workspace: {workspace_info['path']}")
+        print(f"Project: {workspace_info['name']}")
+    
+    # Initialize chat history with workspace context
+    chat_history = initialize_chat_history(workspace_info['path'])
+    
+    # Check server connectivity and set up offline mode if needed
+    setup_server_connection(args)
+    
+    # Main chat loop with improved features
     while True:
-        # Get user input
-        if supports_color():
-            user_input = input("\033[38;5;39m[You]\033[0m ")
-        else:
-            user_input = input("[You] ")
-        
-        # Exit condition
-        if user_input.lower() in ["exit", "quit", "bye", "goodbye"]:
-            print_with_timestamp("Ending chat session. Goodbye!", "success")
-            break
-        
-        # Add to chat history
-        chat_history.append({"role": "user", "content": user_input})
-        
         try:
-            # Prepare request
-            chat_data = {
-                "messages": chat_history,
-                "codebase_dir": codebase_dir
-            }
+            # Get user input with proper command completion
+            user_input = get_user_input()
             
-            # Add optional model if specified
-            if args.model:
-                chat_data["model"] = args.model
-            
-            # Display typing indicator
-            if supports_color():
-                print("\033[38;5;76m[Project Manager]\033[0m ", end="", flush=True)
-                indicators = ['⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽', '⣾']
-                for _ in range(3):  # Short animation
-                    for indicator in indicators:
-                        print(f"\b{indicator}", end="", flush=True)
-                        time.sleep(0.1)
-                print("\b \b", end="", flush=True)  # Clear the indicator
-            
-            # Send request to server with appropriate timeout
-            response = requests.post(url, json=chat_data, timeout=60)
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                agent_response = response_data.get("response", "Sorry, I couldn't process your request.")
-                
-                # Format and display the response
-                if supports_color():
-                    print("\033[38;5;76m[Project Manager]\033[0m " + agent_response)
-                else:
-                    print("[Project Manager] " + agent_response)
-                
-                # Add to chat history
-                chat_history.append({"role": "assistant", "content": agent_response})
-                
-                # Check if we need to compact
-                total_tokens = sum(len(m["content"]) // 4 for m in chat_history)
-                if total_tokens > context_storage["compact_threshold"]:
-                    # Compact chat history
-                    print_with_timestamp("Chat history is getting long. Compacting...", "system")
-                    # Keep system message and the most recent 5 exchanges (10 messages)
-                    system_message = chat_history[0]  # Save system message
-                    chat_history = [system_message] + chat_history[-10:]
-                    print_with_timestamp("Chat history compacted. Continuing with recent messages.", "system")
-            else:
-                # Try to get error message from JSON response
-                try:
-                    error_msg = response.json().get("detail", f"Error: HTTP {response.status_code}")
-                except:
-                    error_msg = f"Error: HTTP {response.status_code}"
-                
-                print_with_timestamp(error_msg, "error")
-                print_with_timestamp("The server might be experiencing issues. Please try again later.", "error")
-        
-        except requests.exceptions.Timeout:
-            print_with_timestamp("Request timed out. The server is taking too long to respond.", "error")
-        except requests.exceptions.ConnectionError:
-            print_with_timestamp("Connection error. The server might be down or unreachable.", "error")
-        except Exception as e:
-            print_with_timestamp(f"Error communicating with server: {str(e)}", "error")
-            
-            # Offer fallback options
-            print_with_timestamp("Would you like to:", "system")
-            print_with_timestamp("1. Retry", "info")
-            print_with_timestamp("2. Start a new chat", "info")
-            print_with_timestamp("3. Exit", "info")
-            
-            choice = input("Enter your choice (1-3): ")
-            
-            if choice == "1":
-                # Remove last user message before retry
-                if chat_history and chat_history[-1]["role"] == "user":
-                    chat_history.pop()
-                continue
-            elif choice == "2":
-                # Keep only the system message
-                system_message = chat_history[0]
-                chat_history = [system_message, initial_agent_message]
-                print_with_timestamp("Starting a new chat session...", "system")
-                print("\n" + agent_prompt + "\n")
-                continue
-            else:
-                print_with_timestamp("Ending chat session. Goodbye!", "success")
+            if should_exit(user_input):
+                display_goodbye_message()
                 break
+            
+            # Handle special commands
+            if handle_special_command(user_input):
+                continue
+            
+            # Process user input and get response
+            response = process_chat_message(user_input, chat_history, args)
+            
+            # Display response with proper formatting
+            display_agent_response(response)
+            
+            # Update chat history and manage context
+            update_chat_history(chat_history, user_input, response)
+            
+        except KeyboardInterrupt:
+            print("\nChat interrupted. Use 'exit' to quit properly.")
+            continue
+        except Exception as e:
+            handle_chat_error(e)
+
+def setup_server_connection(args):
+    """Check server connectivity and set up offline mode if needed"""
+    try:
+        if not check_server_status(args.server):
+            logger.warning(f"Unable to connect to server at {args.server}")
+            context_storage["offline_mode"] = True
+            print_with_timestamp("Entering offline mode. Some features may be limited.", "warning")
+        else:
+            context_storage["offline_mode"] = False
+            print_with_timestamp("Connected to server! 🚀", "success")
+    except Exception as e:
+        logger.error(f"Error checking server status: {e}")
+        context_storage["offline_mode"] = True
+        print_with_timestamp("Entering offline mode due to connection error.", "warning")
+
+def process_chat_message(user_input: str, chat_history: List[Dict[str, str]], args) -> str:
+    """Process chat message and get response"""
+    if context_storage["offline_mode"]:
+        # Try to get response from cache in offline mode
+        cached_response = offline_cache.get_cached_response({"input": user_input})
+        if cached_response:
+            return cached_response["response"]
+        return "I'm currently in offline mode and don't have a cached response for this query."
+    
+    try:
+        # Get current workspace info
+        workspace_info = get_workspace_info()
         
-        print()  # Extra line for readability
+        # Add workspace context to the request
+        request_data = {
+            "messages": chat_history + [{"role": "user", "content": user_input}],
+            "model": args.model if args.model else "default",
+            "workspace_context": {
+                "path": workspace_info["path"],
+                "name": workspace_info["name"],
+                "config_files": workspace_info["config_files"],
+                "directories": workspace_info["directories"],
+                "files": workspace_info["files"]
+            }
+        }
+        
+        response = send_chat_request(request_data, args)
+        # Cache successful response for offline mode
+        offline_cache.cache_response(
+            {"input": user_input},
+            {"response": response}
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing chat message: {e}")
+        return f"I encountered an error: {str(e)}"
+
+def send_chat_request(request_data: Dict[str, Any], args) -> str:
+    """Send chat request to server"""
+    url = f"{args.server}/chat"
+    headers = {"Content-Type": "application/json"}
+    
+    response = requests.post(url, json=request_data, headers=headers, timeout=30)
+    if response.status_code == 200:
+        return response.json()["response"]
+    else:
+        raise Exception(f"Server error: {response.status_code}")
+
+def update_chat_history(chat_history: List[Dict[str, str]], user_input: str, response: str):
+    """Update chat history and manage context"""
+    chat_history.append({"role": "user", "content": user_input})
+    chat_history.append({"role": "assistant", "content": response})
+    
+    # Check if we need to compact history
+    if len(chat_history) > 20:  # Arbitrary threshold
+        compact_chat_history(chat_history)
+
+def compact_chat_history(chat_history: List[Dict[str, str]]):
+    """Compact chat history while preserving context"""
+    system_message = chat_history[0]
+    recent_messages = chat_history[-10:]  # Keep last 5 exchanges
+    summary = create_history_summary(chat_history[1:-10])
+    
+    chat_history.clear()
+    chat_history.append(system_message)
+    chat_history.append({"role": "system", "content": f"Previous conversation summary: {summary}"})
+    chat_history.extend(recent_messages)
+
+def create_history_summary(messages: List[Dict[str, str]]) -> str:
+    """Create a summary of chat history"""
+    # In a real implementation, you might want to use an AI model to create this summary
+    return f"[{len(messages)} previous messages summarized]"
 
 def check_server_status(server_url):
     """Check if the server is running"""
@@ -573,17 +728,156 @@ def setup_keyboard_shortcuts():
 def print_version():
     """Print the current version of Disco-Machina"""
     try:
-        version = "1.0.0"  # Can be updated dynamically
         if supports_color():
-            print(f"\033[38;5;226mDisco-Machina\033[0m \033[38;5;245mversion\033[0m \033[38;5;76m{version}\033[0m")
+            print(f"\033[38;5;226mDisco-Machina\033[0m \033[38;5;245mversion\033[0m \033[38;5;76m{__version__}\033[0m")
         else:
-            print(f"Disco-Machina version {version}")
+            print(f"Disco-Machina version {__version__}")
     except:
         print("Disco-Machina version unknown")
 
+def display_welcome_message():
+    """Display welcome message with proper formatting"""
+    header = "Project Manager Agent Chat"
+    box_width = 70
+    padding = (box_width - len(header) - 2) // 2
+    
+    if supports_color():
+        print("\n\033[38;5;51m╔" + "═" * box_width + "╗\033[0m")
+        print(f"\033[38;5;51m║\033[0m{' ' * padding}{header}{' ' * (box_width - len(header) - padding - 2)}\033[38;5;51m║\033[0m")
+        print("\033[38;5;51m╚" + "═" * box_width + "╝\033[0m\n")
+    else:
+        print("\n╔" + "═" * box_width + "╗")
+        print(f"║{' ' * padding}{header}{' ' * (box_width - len(header) - padding - 2)}║")
+        print("╚" + "═" * box_width + "╝\n")
+    
+    print_with_timestamp("Starting chat session with Project Manager agent...", "system")
+
+def get_user_input() -> str:
+    """Get user input with command completion"""
+    if supports_color():
+        prompt = "\n\033[38;5;39m[You]\033[0m "
+    else:
+        prompt = "\n[You] "
+    
+    try:
+        return input(prompt)
+    except EOFError:
+        raise KeyboardInterrupt
+
+def should_exit(user_input: str) -> bool:
+    """Check if user wants to exit"""
+    return user_input.lower() in ["exit", "quit", "bye", "goodbye"]
+
+def display_goodbye_message():
+    """Display goodbye message"""
+    print_with_timestamp("\nEnding chat session. Goodbye! 👋", "success")
+
+def handle_special_command(user_input: str) -> bool:
+    """Handle special commands"""
+    special_commands = {
+        "/help": display_help,
+        "/clear": clear_screen,
+        "/status": display_status,
+        "/compact": manually_compact,
+        "/version": print_version
+    }
+    
+    command = user_input.split()[0] if user_input.split() else ""
+    if command in special_commands:
+        special_commands[command]()
+        return True
+    return False
+
+def display_help():
+    """Display help information"""
+    help_text = """
+Available Commands:
+-----------------
+/help     - Show this help message
+/clear    - Clear the screen
+/status   - Show server and session status
+/compact  - Manually compact chat history
+/version  - Show version information
+exit      - End the chat session
+"""
+    if supports_color():
+        print("\033[38;5;226m" + help_text + "\033[0m")
+    else:
+        print(help_text)
+
+def clear_screen():
+    """Clear the terminal screen"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def display_status():
+    """Display server and session status"""
+    status = {
+        "Server Mode": "Offline" if context_storage["offline_mode"] else "Online",
+        "Session ID": context_storage["session_id"] or "Not established",
+        "Messages in Context": len(context_storage["messages"]),
+        "Token Count": context_storage["token_count"],
+        "Max Tokens": context_storage["max_tokens"]
+    }
+    
+    if supports_color():
+        print("\n\033[38;5;93mCurrent Status:\033[0m")
+        for key, value in status.items():
+            print(f"\033[38;5;245m{key}:\033[0m \033[38;5;76m{value}\033[0m")
+    else:
+        print("\nCurrent Status:")
+        for key, value in status.items():
+            print(f"{key}: {value}")
+
+def display_agent_response(response: str):
+    """Display agent response with proper formatting"""
+    if supports_color():
+        print("\n\033[38;5;76m[Project Manager]\033[0m " + response + "\n")
+    else:
+        print("\n[Project Manager] " + response + "\n")
+
+def handle_chat_error(error: Exception):
+    """Handle chat errors gracefully"""
+    logger.error(f"Chat error: {str(error)}")
+    
+    if isinstance(error, requests.exceptions.Timeout):
+        print_with_timestamp("Request timed out. The server is taking too long to respond.", "error")
+    elif isinstance(error, requests.exceptions.ConnectionError):
+        print_with_timestamp("Connection error. The server might be down or unreachable.", "error")
+        print_with_timestamp("Switching to offline mode...", "warning")
+        context_storage["offline_mode"] = True
+    else:
+        print_with_timestamp(f"Error: {str(error)}", "error")
+    
+    print_with_timestamp("Would you like to:", "system")
+    print_with_timestamp("1. Retry", "info")
+    print_with_timestamp("2. Start a new chat", "info")
+    print_with_timestamp("3. Switch to offline mode", "info")
+    print_with_timestamp("4. Exit", "info")
+    
+    try:
+        choice = input("Enter your choice (1-4): ")
+        handle_error_choice(choice)
+    except (KeyboardInterrupt, EOFError):
+        print("\nExiting due to interrupt...")
+        sys.exit(1)
+
+def handle_error_choice(choice: str):
+    """Handle user's choice after an error"""
+    if choice == "1":
+        return  # Will retry in the main loop
+    elif choice == "2":
+        context_storage["messages"].clear()
+        print_with_timestamp("Starting a new chat session...", "system")
+    elif choice == "3":
+        context_storage["offline_mode"] = True
+        print_with_timestamp("Switched to offline mode. Some features may be limited.", "warning")
+    else:
+        print_with_timestamp("Ending chat session due to error.", "error")
+        sys.exit(1)
+
 def main():
     # Create main parser
-    parser = argparse.ArgumentParser(description="Disco-Machina - Terminal client for Dev Team API")
+    parser = argparse.ArgumentParser(description="Disco-Machina - Terminal client")
     parser.add_argument("--server", default="http://localhost:8000", help="Server URL")
     parser.add_argument("--version", action="store_true", help="Show version information")
     
@@ -680,7 +974,7 @@ def main():
     try:
         if not check_server_status(args.server):
             print_with_timestamp(f"Warning: Unable to connect to server at {args.server}", "warning")
-            print_with_timestamp("Make sure the Dev Team API server is running.", "warning")
+            print_with_timestamp("Make sure the Disco-Machina API server is running.", "warning")
             
             if supports_color():
                 response = input("\033[38;5;208mDo you want to continue anyway? (y/n): \033[0m")
@@ -690,7 +984,7 @@ def main():
             if response.lower() != 'y':
                 return
         else:
-            print_with_timestamp("Connected to Dev Team API server! 🚀", "success")
+            print_with_timestamp("Connected to Disco-Machina API server! 🚀", "success")
     except Exception as e:
         print_with_timestamp(f"Error checking server status: {str(e)}", "error")
         print_with_timestamp("Continuing anyway...", "warning")
