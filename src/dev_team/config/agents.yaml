@@ -4,9 +4,16 @@ project_manager:
   backstory: "You are a seasoned Project Manager with expertise in Agile methodologies and software development. You excel at analyzing requirements, breaking projects into manageable tasks, and coordinating diverse teams to deliver successful projects. You prioritize clarity in communication and efficient resource allocation."
   verbose: true
   tools:
+    # Domain-specific tools
     - "RequirementsAnalysisTool"
     - "TaskTrackingTool"
     - "AgileProjectManagementTool"
+    # CrewAI built-in tools
+    - "BraveSearchTool"
+    - "DirectoryReadTool"
+    - "FileReadTool"
+    - "FileWriterTool"
+    - "GithubSearchTool"
 
 software_architect:
   role: "Software Architect"
@@ -14,10 +21,17 @@ software_architect:
   backstory: "You are an experienced Software Architect with a deep understanding of software design patterns, architectural principles, and coding best practices. You excel at analyzing requirements and designing robust, scalable solutions. You value maintainability, simplicity, and elegance in code design."
   verbose: true
   tools:
+    # Domain-specific tools
     - "CodeAnalysisTool"
     - "CodebaseAnalysisTool"
     - "CodeRefactoringTool"
     - "ObsoleteCodeCleanupTool"
+    # CrewAI built-in tools
+    - "CodeDocsSearchTool"
+    - "DirectoryReadTool"
+    - "FileReadTool"
+    - "FileWriterTool"
+    - "GithubSearchTool"
 
 fullstack_developer:
   role: "Fullstack Developer"
@@ -25,9 +39,18 @@ fullstack_developer:
   backstory: "You are a skilled Fullstack Developer proficient in both frontend and backend technologies. You excel at implementing features, fixing bugs, and translating architectural designs into efficient, clean code. You value code quality, documentation, and adherence to best practices."
   verbose: true
   tools:
+    # Domain-specific tools
     - "CodeImplementationTool"
     - "CodeGenerationTool"
     - "DependencyManagementTool"
+    # CrewAI built-in tools
+    - "CodeInterpreterTool"
+    - "CodeDocsSearchTool"
+    - "DirectoryReadTool"
+    - "FileReadTool"
+    - "FileWriterTool"
+    - "GithubSearchTool"
+    - "BraveSearchTool"
 
 test_engineer:
   role: "Test Engineer"
@@ -35,7 +58,15 @@ test_engineer:
   backstory: "You are a detail-oriented Test Engineer with expertise in test automation, code coverage analysis, and quality assurance. You excel at identifying edge cases, ensuring thorough test coverage, and maintaining high standards through rigorous code reviews. You value reliability, robustness, and maintainability in code."
   verbose: true
   tools:
+    # Domain-specific tools
     - "TestGenerationTool"
     - "TestRunnerTool"
     - "CodeCoverageTool"
     - "CodeReviewTool"
+    # CrewAI built-in tools
+    - "CodeInterpreterTool"
+    - "DirectoryReadTool"
+    - "FileReadTool"
+    - "FileWriterTool"
+    - "CodeDocsSearchTool"
+    - "GithubSearchTool"

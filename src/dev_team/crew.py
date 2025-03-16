@@ -37,22 +37,7 @@ except ImportError:
                         del self.cache[memory_type]
 
 # Import custom tools
-from .tools.dev_tools import (
-    RequirementsAnalysisTool,
-    TaskTrackingTool,
-    AgileProjectManagementTool,
-    CodeAnalysisTool,
-    CodebaseAnalysisTool,
-    CodeRefactoringTool,
-    ObsoleteCodeCleanupTool,
-    CodeImplementationTool,
-    CodeGenerationTool,
-    DependencyManagementTool,
-    TestGenerationTool,
-    TestRunnerTool,
-    CodeCoverageTool,
-    CodeReviewTool
-)
+from .tools.dev_tools import TOOLS_MAP
 
 # Configure logging
 logging.basicConfig(
@@ -79,10 +64,15 @@ class DevTeamCrew:
         replay_mode: bool = False,
         reset_mode: bool = False,
         chat_mode: bool = False,
-        model: str = "gpt-4"
+        model: str = "gpt-4",
+        process_type = None,
+        memory_enabled: bool = True,
+        tools_list: List[str] = None,
+        verbose: bool = True,
+        allow_delegation: bool = True
     ):
         """
-        Initialize the Dev Team Crew.
+        Initialize the Dev Team Crew with enhanced CrewAI options.
         
         Args:
             project_goal (str): The goal of the project
@@ -94,6 +84,11 @@ class DevTeamCrew:
             reset_mode (bool, optional): Whether to run in reset mode. Defaults to False.
             chat_mode (bool, optional): Whether to run in chat mode. Defaults to False.
             model (str, optional): The model to use. Defaults to "gpt-4".
+            process_type (Process, optional): The CrewAI process type. Defaults to Process.hierarchical.
+            memory_enabled (bool, optional): Whether to enable agent memory. Defaults to True.
+            tools_list (List[str], optional): List of tool names to enable. Defaults to None (all tools).
+            verbose (bool, optional): Whether to enable verbose output. Defaults to True.
+            allow_delegation (bool, optional): Whether to enable agent delegation. Defaults to True.
         """
         self.project_goal = project_goal
         self.codebase_dir = os.path.abspath(codebase_dir)
@@ -104,6 +99,21 @@ class DevTeamCrew:
         self.reset_mode = reset_mode
         self.chat_mode = chat_mode
         self.model = model
+        
+        # Store enhanced CrewAI options
+        from crewai import Process
+        self.process_type = process_type if process_type else Process.hierarchical
+        self.memory_enabled = memory_enabled
+        
+        # Handle tools_list which can be a comma-separated string from terminal_client
+        if isinstance(tools_list, str) and tools_list != "all":
+            self.tools_list = [tool.strip() for tool in tools_list.split(",")]
+            logger.info(f"Parsed tools list from string: {self.tools_list}")
+        else:
+            self.tools_list = tools_list
+            
+        self.verbose = verbose
+        self.allow_delegation = allow_delegation
         
         # Initialize crew components
         self.agents = {}
@@ -258,47 +268,43 @@ class DevTeamCrew:
         }
     
     def _initialize_crew(self):
-        """Initialize the crew with agents and tasks"""
+        """Initialize the crew with agents and tasks using the provided CrewAI options"""
         try:
-            # Initialize tools
-            tools = {
-                "RequirementsAnalysisTool": RequirementsAnalysisTool(),
-                "TaskTrackingTool": TaskTrackingTool(),
-                "AgileProjectManagementTool": AgileProjectManagementTool(),
-                "CodeAnalysisTool": CodeAnalysisTool(),
-                "CodebaseAnalysisTool": CodebaseAnalysisTool(),
-                "CodeRefactoringTool": CodeRefactoringTool(),
-                "ObsoleteCodeCleanupTool": ObsoleteCodeCleanupTool(),
-                "CodeImplementationTool": CodeImplementationTool(),
-                "CodeGenerationTool": CodeGenerationTool(),
-                "DependencyManagementTool": DependencyManagementTool(),
-                "TestGenerationTool": TestGenerationTool(),
-                "TestRunnerTool": TestRunnerTool(),
-                "CodeCoverageTool": CodeCoverageTool(),
-                "CodeReviewTool": CodeReviewTool()
-            }
-            
-            # Initialize agents
+            # Initialize agents with enhanced configurations based on passed parameters
             self.agents = {}
             for agent_id, agent_config in self.agents_config.items():
-                # Get agent tools
+                # Get agent tools based on tools_list parameter
                 agent_tools = []
                 for tool_name in agent_config.get("tools", []):
-                    if tool_name in tools:
-                        agent_tools.append(tools[tool_name])
+                    # Skip tools not in tools_list if it's specified
+                    if self.tools_list is not None and tool_name not in self.tools_list:
+                        continue
+                        
+                    # Add tool if it's in the TOOLS_MAP
+                    if tool_name in TOOLS_MAP:
+                        agent_tools.append(TOOLS_MAP[tool_name])
                 
-                # Create agent
+                # Create agent with parameters passed from terminal_client.py
                 self.agents[agent_id] = Agent(
                     role=agent_config["role"],
                     goal=agent_config["goal"],
                     backstory=agent_config["backstory"],
-                    verbose=agent_config.get("verbose", True),
+                    verbose=self.verbose and agent_config.get("verbose", True),
                     tools=agent_tools,
-                    allow_delegation=True,
-                    llm=self.model
+                    allow_delegation=self.allow_delegation,  # Use parameter from constructor
+                    memory=self.memory_enabled,  # Use parameter from constructor
+                    llm=self.model,
+                    max_rpm=30,  # Rate limiting to prevent API throttling
+                    max_iterations=10,  # Prevent infinite loops
+                    max_execution_time=1800,  # 30 minute timeout per agent action
                 )
+                
+                logger.info(f"Initialized agent '{agent_id}' with {len(agent_tools)} tools")
+                logger.info(f"  Allow Delegation: {self.allow_delegation}")
+                logger.info(f"  Memory Enabled: {self.memory_enabled}")
+                logger.info(f"  Verbose: {self.verbose}")
             
-            # Initialize tasks
+            # Initialize tasks with enhanced context
             self.tasks = {}
             for task_id, task_config in self.tasks_config.items():
                 # Check if agent exists
@@ -307,7 +313,7 @@ class DevTeamCrew:
                     logger.warning(f"Agent '{agent_id}' not found for task '{task_id}'")
                     continue
                 
-                # Create task description with context
+                # Create task description with detailed context
                 task_description = f"""
                 Project Goal: {self.project_goal}
                 Codebase Directory: {self.codebase_dir}
@@ -316,32 +322,99 @@ class DevTeamCrew:
                 Work on the codebase in {self.codebase_dir}.
                 """
                 
-                # Create task
+                # Create task with enhanced configuration
+                task_context = {
+                    "project_goal": self.project_goal,
+                    "codebase_dir": self.codebase_dir,
+                    "task_description": task_config["description"],
+                    "agent_role": self.agents[agent_id].role,
+                    "sprint": self.sprint_counter
+                }
+                
+                # Add custom context from task config if available
+                if "context" in task_config:
+                    task_context.update(task_config["context"])
+                
+                # Create task with priority based on dependency chain
+                priority = len(task_config.get("dependencies", []))
+                
+                # Create output directory path
+                output_dir = os.path.join(self.results_dir, f"sprint_{self.sprint_counter}")
+                os.makedirs(output_dir, exist_ok=True)
+                
                 self.tasks[task_id] = Task(
                     description=task_description,
                     agent=self.agents[agent_id],
                     expected_output=f"Detailed results of {task_config['description']}",
-                    context=[]  # Context will be populated during execution
+                    context=task_context,  # Enhanced structured context
+                    async_execution=False,  # Sequential execution for better control
+                    output_file=os.path.join(output_dir, f"{task_id}.json"),
+                    priority=priority,  # Tasks with more dependencies get higher priority
+                    verbose=self.verbose  # Use the verbose parameter from constructor
                 )
             
-            # Create crew with hierarchical process
+            # Create crew with process type and other parameters from constructor
+            logger.info(f"Creating crew with process type: {self.process_type}")
             self.crew = Crew(
                 agents=list(self.agents.values()),
                 tasks=[],  # Tasks will be added dynamically based on dependencies
-                process=Process.hierarchical,
+                process=self.process_type,  # Use process type from constructor
                 manager_llm=self.model,
-                cache=AgentCache()
+                cache=True,  # Enable caching with the built-in cache
+                memory=self.memory_enabled,  # Use memory parameter from constructor
+                verbose=self.verbose,  # Use verbose parameter from constructor
+                max_rpm=30,  # Rate limiting to prevent API throttling
+                step_callback=self._step_callback  # Add callback for progress monitoring
             )
             
-            logger.info("Crew initialized successfully with agents and tasks")
+            logger.info(f"Crew initialized successfully with process={self.process_type}, memory={self.memory_enabled}, delegation={self.allow_delegation}")
         
         except Exception as e:
             logger.error(f"Error initializing crew: {str(e)}")
             raise
+            
+    def _step_callback(self, step_output):
+        """Callback function for monitoring crew execution progress"""
+        try:
+            # Extract information from step output
+            agent_name = step_output.agent.role if hasattr(step_output, 'agent') else "Unknown Agent"
+            task_description = step_output.task.description if hasattr(step_output, 'task') else "Unknown Task"
+            task_status = step_output.status if hasattr(step_output, 'status') else "in_progress"
+            
+            # Log progress information
+            logger.info(f"Step progress - Agent: {agent_name}, Task: {task_description}, Status: {task_status}")
+            
+            # Create step log file
+            step_log_file = os.path.join(self.results_dir, f"sprint_{self.sprint_counter}", "step_logs.json")
+            
+            # Initialize file if it doesn't exist
+            if not os.path.exists(step_log_file):
+                with open(step_log_file, 'w') as f:
+                    json.dump({"steps": []}, f, indent=2)
+            
+            # Read existing logs
+            with open(step_log_file, 'r') as f:
+                logs = json.load(f)
+            
+            # Add new log
+            logs["steps"].append({
+                "agent": agent_name,
+                "task": task_description,
+                "status": task_status,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Write updated logs
+            with open(step_log_file, 'w') as f:
+                json.dump(logs, f, indent=2)
+                
+        except Exception as e:
+            logger.warning(f"Error in step callback: {str(e)}")
+            # Don't fail the entire process for a callback error
     
     def run(self) -> Dict[str, Any]:
         """
-        Run the Dev Team crew.
+        Run the Dev Team crew with enhanced error recovery and checkpointing.
         
         Returns:
             Dict[str, Any]: The results of the crew run
@@ -359,9 +432,32 @@ class DevTeamCrew:
             sprint_dir = os.path.join(self.results_dir, f"sprint_{self.sprint_counter}")
             os.makedirs(sprint_dir, exist_ok=True)
             
+            # Create checkpoints directory
+            checkpoints_dir = os.path.join(sprint_dir, "checkpoints")
+            os.makedirs(checkpoints_dir, exist_ok=True)
+            
             # Execute tasks in dependency order
             task_outputs = {}
             execution_order = self._get_execution_order()
+            
+            # Check for existing checkpoint
+            checkpoint_file = os.path.join(checkpoints_dir, "checkpoint.json")
+            if os.path.exists(checkpoint_file):
+                try:
+                    with open(checkpoint_file, 'r') as f:
+                        checkpoint_data = json.load(f)
+                        task_outputs = checkpoint_data.get("task_outputs", {})
+                        completed_tasks = checkpoint_data.get("completed_tasks", [])
+                        
+                        logger.info(f"Loaded checkpoint with {len(completed_tasks)} completed tasks")
+                        
+                        # Skip tasks that were already completed
+                        execution_order = [t for t in execution_order if t not in completed_tasks]
+                except Exception as e:
+                    logger.warning(f"Error loading checkpoint: {str(e)}. Starting from beginning.")
+                    task_outputs = {}
+            
+            completed_tasks = []
             
             for task_id in execution_order:
                 logger.info(f"Executing task: {task_id}")
@@ -381,32 +477,80 @@ class DevTeamCrew:
                 # Set task context
                 self.tasks[task_id].context = context
                 
-                # Execute task
-                result = self.crew.execute_task(self.tasks[task_id])
+                # Add task to crew
+                self.crew.tasks = [self.tasks[task_id]]
                 
-                # Store task output
-                task_outputs[task_id] = result
+                # Execute task with retry logic
+                max_retries = 3
+                retry_count = 0
+                last_error = None
                 
-                # Save task result to file
-                result_file = os.path.join(sprint_dir, f"{task_id}.json")
-                with open(result_file, 'w') as f:
-                    json.dump({
-                        "task_id": task_id,
-                        "description": task_config["description"],
-                        "agent": task_config["agent"],
-                        "result": result.raw,
-                        "timestamp": datetime.now().isoformat()
-                    }, f, indent=2)
+                while retry_count < max_retries:
+                    try:
+                        # Execute task
+                        result = self.crew.kickoff()
+                        
+                        # Store task output
+                        task_outputs[task_id] = result
+                        completed_tasks.append(task_id)
+                        
+                        # Save checkpoint after each task
+                        self._save_checkpoint(checkpoints_dir, task_outputs, completed_tasks)
+                        
+                        # Save task result to file
+                        result_file = os.path.join(sprint_dir, f"{task_id}.json")
+                        with open(result_file, 'w') as f:
+                            json.dump({
+                                "task_id": task_id,
+                                "description": task_config["description"],
+                                "agent": task_config["agent"],
+                                "result": result[0] if isinstance(result, list) else str(result),
+                                "timestamp": datetime.now().isoformat()
+                            }, f, indent=2)
+                        
+                        logger.info(f"Task {task_id} completed successfully")
+                        break  # Success, exit retry loop
+                        
+                    except Exception as e:
+                        retry_count += 1
+                        last_error = e
+                        backoff_time = 2 ** retry_count  # Exponential backoff
+                        
+                        logger.warning(f"Task {task_id} failed (attempt {retry_count}/{max_retries}): {str(e)}")
+                        logger.info(f"Retrying in {backoff_time} seconds...")
+                        
+                        time.sleep(backoff_time)
                 
-                logger.info(f"Task {task_id} completed")
+                # If all retries failed, handle the error
+                if retry_count == max_retries and last_error:
+                    logger.error(f"Task {task_id} failed after {max_retries} attempts: {str(last_error)}")
+                    
+                    # Create error report
+                    error_file = os.path.join(sprint_dir, f"{task_id}_error.json")
+                    with open(error_file, 'w') as f:
+                        json.dump({
+                            "task_id": task_id,
+                            "description": task_config["description"],
+                            "error": str(last_error),
+                            "timestamp": datetime.now().isoformat()
+                        }, f, indent=2)
+                    
+                    # Consider whether to continue or abort based on task importance
+                    if task_id in ["requirements_analysis", "architecture_design"]:
+                        # Critical tasks - abort if they fail
+                        raise Exception(f"Critical task {task_id} failed: {str(last_error)}")
+                    else:
+                        # Non-critical tasks - continue with next task
+                        logger.warning(f"Continuing despite failure of task {task_id}")
             
-            # Create sprint summary
+            # Create sprint summary with detailed status
             sprint_summary = {
                 "sprint": self.sprint_counter,
                 "project_goal": self.project_goal,
                 "codebase_dir": self.codebase_dir,
                 "tasks": list(execution_order),
-                "completed": True,
+                "completed_tasks": completed_tasks,
+                "completed": len(completed_tasks) == len(self.tasks_config),
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -414,6 +558,14 @@ class DevTeamCrew:
             summary_file = os.path.join(sprint_dir, "sprint_summary.json")
             with open(summary_file, 'w') as f:
                 json.dump(sprint_summary, f, indent=2)
+            
+            # Clean up checkpoints if sprint completed successfully
+            if sprint_summary["completed"]:
+                try:
+                    import shutil
+                    shutil.rmtree(checkpoints_dir)
+                except Exception as e:
+                    logger.warning(f"Could not clean up checkpoints: {str(e)}")
             
             # Increment sprint counter
             self.sprint_counter += 1
@@ -427,8 +579,44 @@ class DevTeamCrew:
             return {
                 "status": "error",
                 "error": str(e),
+                "sprint": self.sprint_counter,
                 "timestamp": datetime.now().isoformat()
             }
+    
+    def _save_checkpoint(self, checkpoints_dir: str, task_outputs: Dict[str, Any], completed_tasks: List[str]):
+        """Save a checkpoint of the current progress."""
+        try:
+            checkpoint_data = {
+                "timestamp": datetime.now().isoformat(),
+                "completed_tasks": completed_tasks,
+                "task_outputs": task_outputs
+            }
+            
+            checkpoint_file = os.path.join(checkpoints_dir, "checkpoint.json")
+            
+            # Create a backup of the previous checkpoint
+            if os.path.exists(checkpoint_file):
+                backup_file = os.path.join(checkpoints_dir, f"checkpoint_{int(time.time())}.bak")
+                try:
+                    import shutil
+                    shutil.copy2(checkpoint_file, backup_file)
+                except Exception as e:
+                    logger.warning(f"Failed to create checkpoint backup: {str(e)}")
+            
+            # Write the new checkpoint
+            with open(checkpoint_file, 'w') as f:
+                # Convert complex objects to strings for serialization
+                serializable_outputs = {}
+                for task_id, output in task_outputs.items():
+                    serializable_outputs[task_id] = output[0] if isinstance(output, list) else str(output)
+                
+                checkpoint_data["task_outputs"] = serializable_outputs
+                json.dump(checkpoint_data, f, indent=2)
+                
+            logger.info(f"Checkpoint saved with {len(completed_tasks)} completed tasks")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint: {str(e)}")
     
     def _get_execution_order(self) -> List[str]:
         """
@@ -573,56 +761,35 @@ class DevTeamCrew:
             }
     
     def process_chat(self, messages: List[Dict[str, str]], model: str = "default", workspace_context: Dict[str, Any] = None) -> str:
-        """
-        Process a chat message and generate a response.
-        
-        Args:
-            messages (List[Dict[str, str]]): List of chat messages
-            model (str, optional): Model to use. Defaults to "default".
-            workspace_context (Dict[str, Any], optional): Context about the workspace. Defaults to None.
-            
-        Returns:
-            str: Response to the chat message
-        """
+        """Process a chat message and return a response"""
         try:
-            # Use openai directly for chat to avoid complexity of crew for simple chat
-            import openai
+            # Initialize chat mode if not already in it
+            if not self.chat_mode:
+                self.chat_mode = True
+                self._initialize_crew()
             
-            # Use environment variable for OpenAI API key
-            openai.api_key = os.environ.get("OPENAI_API_KEY")
+            # Get the project manager agent
+            project_manager = self.agents.get("project_manager")
+            if not project_manager:
+                raise ValueError("Project Manager agent not initialized")
             
-            # Use specified model or default to GPT-4
-            if model == "default":
-                model = "gpt-4"
-            
-            # Add workspace context to system message
-            if workspace_context:
-                system_content = messages[0]["content"] if messages[0]["role"] == "system" else ""
-                workspace_info = f"""
-                Working directory: {workspace_context.get('path', 'N/A')}
-                Project name: {workspace_context.get('name', 'N/A')}
-                Config files: {', '.join(workspace_context.get('config_files', []))}
-                Directories: {', '.join(workspace_context.get('directories', [][:5]))}
-                """
-                
-                if messages[0]["role"] == "system":
-                    messages[0]["content"] += f"\n\nWorkspace Context:\n{workspace_info}"
-                else:
-                    messages.insert(0, {
-                        "role": "system",
-                        "content": f"You are the Project Manager agent for a dev team. {workspace_info}"
-                    })
-            
-            # Call OpenAI API
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=messages,
-                temperature=0.7
+            # Create a chat task
+            chat_task = Task(
+                description=f"Process chat message: {messages[-1]['content']}",
+                agent=project_manager,
+                context={
+                    "messages": messages,
+                    "workspace_context": workspace_context or {},
+                    "current_dir": self.codebase_dir
+                }
             )
             
-            # Return response text
-            return response.choices[0].message.content
-        
+            # Execute the chat task
+            result = chat_task.execute()
+            
+            # Return the response
+            return result.raw_output
+            
         except Exception as e:
             logger.error(f"Error processing chat: {str(e)}")
-            return f"I'm sorry, I encountered an error: {str(e)}"
+            return f"I encountered an error: {str(e)}"

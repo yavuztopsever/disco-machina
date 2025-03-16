@@ -29,6 +29,8 @@ import sqlite3
 import readline
 import atexit
 import hashlib
+import websocket
+import queue
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Any
 
@@ -248,52 +250,166 @@ def compact_context():
         print("====== COMPACTION COMPLETE ======\n")
 
 def monitor_job(job_id, server_url, interval=2):
-    """Monitor job progress and stream output"""
+    """Monitor job progress and stream output using WebSockets if available"""
     print_with_timestamp(f"Monitoring job {job_id}", "system")
     
-    while True:
-        try:
-            response = requests.get(f"{server_url}/projects/{job_id}")
-            if response.status_code == 200:
-                job_data = response.json()
-                status = job_data.get("status")
+    # Try to use WebSocket for real-time updates
+    try:
+        ws_url = f"ws://{server_url.split('://', 1)[1]}/ws/{job_id}"
+        print_with_timestamp(f"Connecting to WebSocket for real-time updates...", "system")
+        
+        # Create message queue for threaded communication
+        message_queue = queue.Queue()
+        
+        # Create WebSocket in a separate thread
+        ws_thread = threading.Thread(
+            target=run_websocket_client,
+            args=(ws_url, message_queue, job_id),
+            daemon=True
+        )
+        ws_thread.start()
+        
+        # Process WebSocket messages
+        while True:
+            try:
+                # Non-blocking queue get with timeout
+                try:
+                    message = message_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
                 
-                if status == "completed":
-                    print_with_timestamp(f"Job completed successfully! 🎉", "success")
-                    result = job_data.get("result", {})
+                # Check for end marker
+                if message == "__WEBSOCKET_CLOSED__":
+                    print_with_timestamp("WebSocket connection closed", "system")
+                    break
                     
-                    # Pretty print the result with colors if supported
-                    if supports_color():
-                        formatted_json = json.dumps(result, indent=2)
-                        # Basic JSON syntax highlighting
-                        formatted_json = formatted_json.replace('{', '\033[38;5;208m{\033[0m')
-                        formatted_json = formatted_json.replace('}', '\033[38;5;208m}\033[0m')
-                        formatted_json = formatted_json.replace('[', '\033[38;5;208m[\033[0m')
-                        formatted_json = formatted_json.replace(']', '\033[38;5;208m]\033[0m')
-                        formatted_json = formatted_json.replace(':', '\033[38;5;208m:\033[0m')
-                        print(formatted_json)
+                # Process normal message
+                if isinstance(message, dict):
+                    status = message.get("status")
+                    progress = message.get("progress", 0)
+                    msg_text = message.get("message", "")
+                    
+                    # Display appropriate message based on status
+                    if status == "completed":
+                        print_with_timestamp(f"Job completed successfully! 🎉", "success")
+                        result = message.get("result", {})
+                        
+                        # Pretty print the result with colors if supported
+                        format_and_print_json(result)
+                        return
+                    elif status == "failed":
+                        print_with_timestamp("Job failed! ❌", "error")
+                        error = message.get("error", "Unknown error")
+                        print_with_timestamp(f"Error: {error}", "error")
+                        return
                     else:
-                        print(json.dumps(result, indent=2))
-                    break
-                elif status == "failed":
-                    print_with_timestamp("Job failed! ❌", "error")
-                    error = job_data.get("result", {}).get("error", "Unknown error")
-                    print_with_timestamp(f"Error: {error}", "error")
-                    break
+                        # Format progress bar
+                        progress_str = format_progress_bar(progress)
+                        print_with_timestamp(f"{msg_text} {progress_str}", "info")
+                
+            except Exception as e:
+                print_with_timestamp(f"Error processing WebSocket message: {str(e)}", "error")
+        
+    except Exception as e:
+        print_with_timestamp(f"WebSocket connection failed, falling back to polling: {str(e)}", "warning")
+        
+        # Fall back to traditional polling
+        while True:
+            try:
+                response = requests.get(f"{server_url}/projects/{job_id}")
+                if response.status_code == 200:
+                    job_data = response.json()
+                    status = job_data.get("status")
+                    
+                    if status == "completed":
+                        print_with_timestamp(f"Job completed successfully! 🎉", "success")
+                        result = job_data.get("result", {})
+                        format_and_print_json(result)
+                        break
+                    elif status == "failed":
+                        print_with_timestamp("Job failed! ❌", "error")
+                        error = job_data.get("result", {}).get("error", "Unknown error")
+                        print_with_timestamp(f"Error: {error}", "error")
+                        break
+                    else:
+                        # Still running, show status update with rotating indicator
+                        indicators = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+                        indicator = indicators[int(time.time()) % len(indicators)]
+                        progress = job_data.get("progress", 0)
+                        progress_str = format_progress_bar(progress)
+                        print_with_timestamp(f"Job status: {status} {indicator} {progress_str}", "info")
                 else:
-                    # Still running, show status update with rotating indicator
-                    indicators = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
-                    indicator = indicators[int(time.time()) % len(indicators)]
-                    print_with_timestamp(f"Job status: {status} {indicator}", "info")
-            else:
-                print_with_timestamp(f"Error checking job status: {response.status_code}", "error")
-                print_with_timestamp(response.text, "error")
+                    print_with_timestamp(f"Error checking job status: {response.status_code}", "error")
+                    print_with_timestamp(response.text, "error")
+                    break
+            except Exception as e:
+                print_with_timestamp(f"Error monitoring job: {str(e)}", "error")
                 break
-        except Exception as e:
-            print_with_timestamp(f"Error monitoring job: {str(e)}", "error")
-            break
+                
+            time.sleep(interval)
+
+def format_progress_bar(progress, width=20):
+    """Format a text-based progress bar"""
+    filled_width = int(width * progress / 100)
+    bar = '█' * filled_width + '░' * (width - filled_width)
+    
+    if supports_color():
+        return f"\033[38;5;76m[{bar}] {progress}%\033[0m"
+    else:
+        return f"[{bar}] {progress}%"
+
+def format_and_print_json(data):
+    """Format and print JSON with optional syntax highlighting"""
+    if supports_color():
+        formatted_json = json.dumps(data, indent=2)
+        # Basic JSON syntax highlighting
+        formatted_json = formatted_json.replace('{', '\033[38;5;208m{\033[0m')
+        formatted_json = formatted_json.replace('}', '\033[38;5;208m}\033[0m')
+        formatted_json = formatted_json.replace('[', '\033[38;5;208m[\033[0m')
+        formatted_json = formatted_json.replace(']', '\033[38;5;208m]\033[0m')
+        formatted_json = formatted_json.replace(':', '\033[38;5;208m:\033[0m')
+        print(formatted_json)
+    else:
+        print(json.dumps(data, indent=2))
+
+def run_websocket_client(ws_url, message_queue, job_id):
+    """Run WebSocket client in a separate thread"""
+    try:
+        # Define callback functions
+        def on_message(ws, message):
+            try:
+                data = json.loads(message)
+                message_queue.put(data)
+            except Exception as e:
+                logger.error(f"WebSocket message parsing error: {str(e)}")
+                message_queue.put({"status": "error", "error": str(e)})
+                
+        def on_error(ws, error):
+            logger.error(f"WebSocket error: {str(error)}")
+            message_queue.put({"status": "error", "error": str(error)})
             
-        time.sleep(interval)
+        def on_close(ws, close_status_code, close_msg):
+            logger.info(f"WebSocket connection closed: {close_status_code} - {close_msg}")
+            message_queue.put("__WEBSOCKET_CLOSED__")
+            
+        def on_open(ws):
+            logger.info(f"WebSocket connection established for job {job_id}")
+            
+        # Create and run WebSocket client
+        ws = websocket.WebSocketApp(
+            ws_url,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            on_open=on_open
+        )
+        
+        # Run WebSocket client with ping interval
+        ws.run_forever(ping_interval=30)
+        
+    except Exception as e:
+        logger.error(f"WebSocket thread error: {str(e)}")
+        message_queue.put("__WEBSOCKET_CLOSED__")
 
 def manually_compact():
     """Manually trigger context compaction"""
@@ -332,25 +448,36 @@ def resolve_workspace_path(provided_path=None):
     return workspace_path
 
 def create_project(args):
-    """Create a new project"""
+    """Create a new project with enhanced CrewAI integration"""
     url = f"{args.server}/projects"
     
     # Resolve and validate workspace path
     codebase_dir = resolve_workspace_path(args.dir)
     
+    # Enhanced request data with additional parameters for CrewAI
     data = {
         "project_goal": args.goal,
         "codebase_dir": codebase_dir,
-        "non_interactive": not args.interactive
+        "non_interactive": not args.interactive,
+        "process_type": args.process if hasattr(args, 'process') else "hierarchical",
+        "model": args.model if hasattr(args, 'model') else None,
+        "memory": args.memory if hasattr(args, 'memory') else True,
+        "tools": args.tools if hasattr(args, 'tools') and args.tools else "all"
     }
     
     print_with_timestamp(f"Creating project with goal: {args.goal}", "info")
     print_with_timestamp(f"Using codebase directory: {codebase_dir}", "info")
     
+    # Display enhanced settings
     interactive_mode = "🔄 Interactive" if args.interactive else "⏩ Non-interactive"
     print_with_timestamp(f"Mode: {interactive_mode}", "info")
+    print_with_timestamp(f"Process Type: {data['process_type']}", "info")
+    print_with_timestamp(f"Memory Enabled: {'Yes' if data['memory'] else 'No'}", "info")
+    print_with_timestamp(f"Tools: {data['tools']}", "info")
+    if data['model']:
+        print_with_timestamp(f"Using Model: {data['model']}", "info")
     
-    # Animate "Creating project" message
+    # Animate "Creating project" message with more detailed steps
     if supports_color():
         print("\033[38;5;205m", end="")
         print("Initializing Dev Team agents...", end="", flush=True)
@@ -358,15 +485,33 @@ def create_project(args):
             time.sleep(0.3)
             print(".", end="", flush=True)
         print("\033[0m")
+        
+        print("\033[38;5;39m", end="")
+        print("Setting up agent hierarchy...", end="", flush=True)
+        for _ in range(3):
+            time.sleep(0.3)
+            print(".", end="", flush=True)
+        print("\033[0m")
+        
+        print("\033[38;5;76m", end="")
+        print("Configuring tools and memory...", end="", flush=True)
+        for _ in range(3):
+            time.sleep(0.3)
+            print(".", end="", flush=True)
+        print("\033[0m")
     
     try:
-        response = requests.post(url, json=data)
+        # Request with enhanced timeout for larger projects
+        response = requests.post(url, json=data, timeout=60)
         if response.status_code == 201:
             job_data = response.json()
             job_id = job_data.get("job_id")
             print_with_timestamp(f"Project created with job ID: {job_id}", "success")
             
-            # Monitor the job progress
+            # Store job ID in context storage for later use
+            context_storage["current_job_id"] = job_id
+            
+            # Monitor the job progress with enhanced WebSocket support
             monitor_job(job_id, args.server)
         else:
             print_with_timestamp(f"Error creating project: {response.status_code}", "error")
@@ -423,28 +568,61 @@ def get_project(args):
         print_with_timestamp(f"Error: {str(e)}")
 
 def replay_task(args):
-    """Replay a specific task"""
+    """Replay a specific task with enhanced CrewAI features"""
     url = f"{args.server}/tasks/replay"
     
+    # Enhanced data with CrewAI settings
     data = {
-        "task_index": args.index
+        "task_index": args.index,
+        "process_type": args.process if hasattr(args, 'process') else "hierarchical",
+        "model": args.model if hasattr(args, 'model') else None,
+        "memory": args.memory if hasattr(args, 'memory') else True,
+        "tools": args.tools if hasattr(args, 'tools') and args.tools else "all",
+        "verbose": args.verbose if hasattr(args, 'verbose') else True,
+        "with_delegation": args.delegation if hasattr(args, 'delegation') else True
     }
     
-    print_with_timestamp(f"Replaying task with index: {args.index}")
+    print_with_timestamp(f"Replaying task with index: {args.index}", "info")
+    print_with_timestamp(f"Process Type: {data['process_type']}", "info")
+    print_with_timestamp(f"Memory Enabled: {'Yes' if data['memory'] else 'No'}", "info")
+    print_with_timestamp(f"Agent Delegation: {'Enabled' if data['with_delegation'] else 'Disabled'}", "info")
+    if data['model']:
+        print_with_timestamp(f"Using Model: {data['model']}", "info")
+    
+    # Animate "Replaying task" message with detailed steps
+    if supports_color():
+        print("\033[38;5;205m", end="")
+        print("Initializing replay environment...", end="", flush=True)
+        for _ in range(3):
+            time.sleep(0.3)
+            print(".", end="", flush=True)
+        print("\033[0m")
+        
+        print("\033[38;5;76m", end="")
+        print("Loading task context and dependencies...", end="", flush=True)
+        for _ in range(3):
+            time.sleep(0.3)
+            print(".", end="", flush=True)
+        print("\033[0m")
+    
     try:
-        response = requests.post(url, json=data)
+        # Request with enhanced timeout for complex tasks
+        response = requests.post(url, json=data, timeout=60)
         if response.status_code == 202:
             job_data = response.json()
             job_id = job_data.get("job_id")
-            print_with_timestamp(f"Task replay queued with job ID: {job_id}")
+            print_with_timestamp(f"Task replay queued with job ID: {job_id}", "success")
             
-            # Monitor the job progress
+            # Store job ID in context storage for later use
+            context_storage["current_job_id"] = job_id
+            
+            # Monitor the job progress with enhanced WebSocket support
             monitor_job(job_id, args.server)
         else:
-            print_with_timestamp(f"Error replaying task: {response.status_code}")
-            print(response.text)
+            print_with_timestamp(f"Error replaying task: {response.status_code}", "error")
+            print_with_timestamp(response.text, "error")
     except Exception as e:
-        print_with_timestamp(f"Error: {str(e)}")
+        print_with_timestamp(f"Error: {str(e)}", "error")
 
 def reset_memory(args):
     """Reset memory"""
@@ -568,7 +746,7 @@ def chat_with_agent(args):
                 continue
             
             # Process user input and get response
-            response = process_chat_message(user_input, chat_history, args)
+            response = process_chat_message(user_input, chat_history, args, workspace_info['path'])
             
             # Display response with proper formatting
             display_agent_response(response)
@@ -597,7 +775,7 @@ def setup_server_connection(args):
         context_storage["offline_mode"] = True
         print_with_timestamp("Entering offline mode due to connection error.", "warning")
 
-def process_chat_message(user_input: str, chat_history: List[Dict[str, str]], args) -> str:
+def process_chat_message(user_input: str, chat_history: List[Dict[str, str]], args, current_dir: str) -> str:
     """Process chat message and get response"""
     if context_storage["offline_mode"]:
         # Try to get response from cache in offline mode
@@ -620,7 +798,8 @@ def process_chat_message(user_input: str, chat_history: List[Dict[str, str]], ar
                 "config_files": workspace_info["config_files"],
                 "directories": workspace_info["directories"],
                 "files": workspace_info["files"]
-            }
+            },
+            "current_dir": current_dir
         }
         
         response = send_chat_request(request_data, args)
@@ -875,6 +1054,121 @@ def handle_error_choice(choice: str):
         print_with_timestamp("Ending chat session due to error.", "error")
         sys.exit(1)
 
+def train_crew(args):
+    """Train a crew with enhanced CrewAI integration"""
+    url = f"{args.server}/train"
+    
+    # Resolve and validate workspace path
+    codebase_dir = resolve_workspace_path(args.dir)
+    
+    # Enhanced request data with training parameters
+    data = {
+        "project_goal": args.goal,
+        "codebase_dir": codebase_dir,
+        "iterations": args.iterations,
+        "output_file": args.output,
+        "process_type": args.process if hasattr(args, 'process') else "hierarchical",
+        "model": args.model if hasattr(args, 'model') else None,
+        "memory": args.memory if hasattr(args, 'memory') else True,
+        "tools": args.tools if hasattr(args, 'tools') and args.tools else "all"
+    }
+    
+    print_with_timestamp(f"Training crew on goal: {args.goal}", "info")
+    print_with_timestamp(f"Using codebase directory: {codebase_dir}", "info")
+    print_with_timestamp(f"Training iterations: {args.iterations}", "info")
+    print_with_timestamp(f"Output file: {args.output}", "info")
+    
+    # Display enhanced settings
+    print_with_timestamp(f"Process Type: {data['process_type']}", "info")
+    print_with_timestamp(f"Memory Enabled: {'Yes' if data['memory'] else 'No'}", "info")
+    print_with_timestamp(f"Tools: {data['tools']}", "info")
+    if data['model']:
+        print_with_timestamp(f"Using Model: {data['model']}", "info")
+    
+    # Animate "Training crew" message
+    if supports_color():
+        print("\033[38;5;205m", end="")
+        print("Initializing training session...", end="", flush=True)
+        for _ in range(5):
+            time.sleep(0.3)
+            print(".", end="", flush=True)
+        print("\033[0m")
+    
+    try:
+        # Request with enhanced timeout for training sessions
+        response = requests.post(url, json=data, timeout=60)
+        if response.status_code == 202:
+            job_data = response.json()
+            job_id = job_data.get("job_id")
+            print_with_timestamp(f"Training session queued with job ID: {job_id}", "success")
+            
+            # Store job ID in context storage for later use
+            context_storage["current_job_id"] = job_id
+            
+            # Monitor the job progress with enhanced WebSocket support
+            monitor_job(job_id, args.server)
+        else:
+            print_with_timestamp(f"Error starting training session: {response.status_code}", "error")
+            print_with_timestamp(response.text, "error")
+    except Exception as e:
+        print_with_timestamp(f"Error: {str(e)}", "error")
+
+def test_crew(args):
+    """Test a crew with various models and configurations"""
+    url = f"{args.server}/test"
+    
+    # Resolve and validate workspace path
+    codebase_dir = resolve_workspace_path(args.dir)
+    
+    # Enhanced request data with testing parameters
+    data = {
+        "project_goal": args.goal,
+        "codebase_dir": codebase_dir,
+        "iterations": args.iterations,
+        "model": args.model,
+        "process_type": args.process if hasattr(args, 'process') else "hierarchical",
+        "memory": args.memory if hasattr(args, 'memory') else True,
+        "tools": args.tools if hasattr(args, 'tools') and args.tools else "all"
+    }
+    
+    print_with_timestamp(f"Testing crew on goal: {args.goal}", "info")
+    print_with_timestamp(f"Using codebase directory: {codebase_dir}", "info")
+    print_with_timestamp(f"Test iterations: {args.iterations}", "info")
+    print_with_timestamp(f"Testing model: {args.model}", "info")
+    
+    # Display enhanced settings
+    print_with_timestamp(f"Process Type: {data['process_type']}", "info")
+    print_with_timestamp(f"Memory Enabled: {'Yes' if data['memory'] else 'No'}", "info")
+    print_with_timestamp(f"Tools: {data['tools']}", "info")
+    
+    # Animate "Testing crew" message
+    if supports_color():
+        print("\033[38;5;205m", end="")
+        print("Initializing test session...", end="", flush=True)
+        for _ in range(5):
+            time.sleep(0.3)
+            print(".", end="", flush=True)
+        print("\033[0m")
+    
+    try:
+        # Request with enhanced timeout for test sessions
+        response = requests.post(url, json=data, timeout=60)
+        if response.status_code == 202:
+            job_data = response.json()
+            job_id = job_data.get("job_id")
+            print_with_timestamp(f"Test session queued with job ID: {job_id}", "success")
+            
+            # Store job ID in context storage for later use
+            context_storage["current_job_id"] = job_id
+            
+            # Monitor the job progress with enhanced WebSocket support
+            monitor_job(job_id, args.server)
+        else:
+            print_with_timestamp(f"Error starting test session: {response.status_code}", "error")
+            print_with_timestamp(response.text, "error")
+    except Exception as e:
+        print_with_timestamp(f"Error: {str(e)}", "error")
+
 def main():
     # Create main parser
     parser = argparse.ArgumentParser(description="Disco-Machina - Terminal client")
@@ -884,12 +1178,55 @@ def main():
     # Create subparsers for commands
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
     
-    # Create parser for "create" command
-    create_parser = subparsers.add_parser("create", help="Create a new project")
+    # Create parser for "create" command with enhanced CrewAI options
+    create_parser = subparsers.add_parser("create", help="Create a new project with CrewAI agents")
     create_parser.add_argument("--goal", required=True, help="Project goal")
     create_parser.add_argument("--dir", help="Codebase directory (defaults to current directory)")
     create_parser.add_argument("--interactive", action="store_true", help="Run in interactive mode")
+    create_parser.add_argument("--process", choices=["sequential", "parallel", "hierarchical"], 
+                             default="hierarchical", help="CrewAI process type (default: hierarchical)")
+    create_parser.add_argument("--model", help="LLM model to use (e.g., gpt-4, gpt-3.5-turbo, claude-3-opus)")
+    create_parser.add_argument("--memory", action="store_true", default=True, 
+                             help="Enable agent memory for better context retention (default: True)")
+    create_parser.add_argument("--no-memory", action="store_false", dest="memory", 
+                             help="Disable agent memory")
+    create_parser.add_argument("--tools", help="Comma-separated list of tools to enable, or 'all' for all tools")
+    create_parser.add_argument("--delegation", action="store_true", default=True,
+                             help="Enable agent delegation (default: True)")
+    create_parser.add_argument("--no-delegation", action="store_false", dest="delegation",
+                             help="Disable agent delegation")
     create_parser.set_defaults(func=create_project)
+    
+    # Create parser for "train" command with enhanced CrewAI options
+    train_parser = subparsers.add_parser("train", help="Train a crew with multiple iterations")
+    train_parser.add_argument("iterations", type=int, help="Number of training iterations")
+    train_parser.add_argument("output", help="Output file for training results")
+    train_parser.add_argument("--goal", required=True, help="Project goal for training")
+    train_parser.add_argument("--dir", help="Codebase directory (defaults to current directory)")
+    train_parser.add_argument("--process", choices=["sequential", "parallel", "hierarchical"], 
+                             default="hierarchical", help="CrewAI process type (default: hierarchical)")
+    train_parser.add_argument("--model", help="LLM model to use (e.g., gpt-4, gpt-3.5-turbo, claude-3-opus)")
+    train_parser.add_argument("--memory", action="store_true", default=True, 
+                             help="Enable agent memory for better context retention (default: True)")
+    train_parser.add_argument("--no-memory", action="store_false", dest="memory", 
+                             help="Disable agent memory")
+    train_parser.add_argument("--tools", help="Comma-separated list of tools to enable, or 'all' for all tools")
+    train_parser.set_defaults(func=train_crew)
+    
+    # Create parser for "test" command with enhanced CrewAI options
+    test_parser = subparsers.add_parser("test", help="Test a crew with a specific model")
+    test_parser.add_argument("iterations", type=int, help="Number of test iterations")
+    test_parser.add_argument("model", help="LLM model to test with")
+    test_parser.add_argument("--goal", required=True, help="Project goal for testing")
+    test_parser.add_argument("--dir", help="Codebase directory (defaults to current directory)")
+    test_parser.add_argument("--process", choices=["sequential", "parallel", "hierarchical"], 
+                            default="hierarchical", help="CrewAI process type (default: hierarchical)")
+    test_parser.add_argument("--memory", action="store_true", default=True, 
+                            help="Enable agent memory for better context retention (default: True)")
+    test_parser.add_argument("--no-memory", action="store_false", dest="memory", 
+                            help="Disable agent memory")
+    test_parser.add_argument("--tools", help="Comma-separated list of tools to enable, or 'all' for all tools")
+    test_parser.set_defaults(func=test_crew)
     
     # Create parser for "list" command
     list_parser = subparsers.add_parser("list", help="List all projects")
@@ -900,9 +1237,25 @@ def main():
     get_parser.add_argument("job_id", help="Job ID")
     get_parser.set_defaults(func=get_project)
     
-    # Create parser for "replay" command
-    replay_parser = subparsers.add_parser("replay", help="Replay a task")
+    # Create parser for "replay" command with enhanced CrewAI options
+    replay_parser = subparsers.add_parser("replay", help="Replay a task with CrewAI agents")
     replay_parser.add_argument("index", type=int, help="Task index")
+    replay_parser.add_argument("--process", choices=["sequential", "parallel", "hierarchical"], 
+                             default="hierarchical", help="CrewAI process type (default: hierarchical)")
+    replay_parser.add_argument("--model", help="LLM model to use (e.g., gpt-4, gpt-3.5-turbo, claude-3-opus)")
+    replay_parser.add_argument("--memory", action="store_true", default=True, 
+                             help="Enable agent memory for better context retention (default: True)")
+    replay_parser.add_argument("--no-memory", action="store_false", dest="memory", 
+                             help="Disable agent memory")
+    replay_parser.add_argument("--tools", help="Comma-separated list of tools to enable, or 'all' for all tools")
+    replay_parser.add_argument("--verbose", action="store_true", default=True,
+                             help="Enable verbose output (default: True)")
+    replay_parser.add_argument("--quiet", action="store_false", dest="verbose",
+                             help="Disable verbose output")
+    replay_parser.add_argument("--delegation", action="store_true", default=True,
+                             help="Enable agent delegation (default: True)")
+    replay_parser.add_argument("--no-delegation", action="store_false", dest="delegation",
+                             help="Disable agent delegation")
     replay_parser.set_defaults(func=replay_task)
     
     # Create parser for "reset" command
@@ -917,6 +1270,11 @@ def main():
     # Create parser for "chat" command
     chat_parser = subparsers.add_parser("chat", help="Start an interactive chat with the Project Manager agent")
     chat_parser.add_argument("--model", default="", help="Specify AI model to use (if supported)")
+    chat_parser.add_argument("--dir", help="Target codebase directory (defaults to current directory)")
+    chat_parser.add_argument("--memory", action="store_true", default=True, 
+                          help="Enable agent memory for better context retention (default: True)")
+    chat_parser.add_argument("--no-memory", action="store_false", dest="memory", 
+                          help="Disable agent memory")
     chat_parser.set_defaults(func=chat_with_agent)
     
     # Parse arguments
